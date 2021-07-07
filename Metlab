@@ -1,0 +1,102 @@
+function [PoxoG,PoxoGci]=PoxoGestimate(NALT,NART,iART,alphaci,Noxo,NoxoCI)
+%function [PoxoG,PoxoGci]=PoxoGestimate(NALT,NALT,iART,alphaci,Noxo,NoxoCI)
+%
+% estimates underlying FoxoG probabilty (PoxoG)
+%
+% inputs:   NALT number of alternate alleles
+%           NART number of alternate alleles in OxoG configuration
+%           iART vector same size of NALT and NART =true for artifact-mode
+%               (C>A, G>T), default everything is artifact mode
+%           alphaci confidence interval alpha level (default 0.05)
+%           Noxo -- estimated number of oxoG artifacts (optional parameter)
+%           NoxoCI -- estimated CI of number of oxoG artifacts (optional parameter)
+% outputs:  PoxoG underlying OxoG bias toward F1R2 for G>T, F2R1 for C>A
+%           PoxoGci confidence interval for PoxoG
+%
+if (nargin<3)
+    iART=true(size(NART));
+end
+if (nargin<4) || isempty(alphaci)
+    alphaci=0.05;
+end
+if (nargin<6)
+    Noxo= NaN;
+end
+
+PoxoG=NaN;
+PoxoGci=NaN*zeros(2,1); 
+
+if sum(iART) == 0
+   disp('No artifact mode mutations.  Cannot estimate PoxoG') 
+   return
+end
+
+% Z corresponding to alphaci 
+ZCI=norminv(1-alphaci/2,0,1);
+
+[Fhat,Fci] = binofit(NART(iART),NALT(iART),alphaci);
+eART=diff(Fci,[],2);
+xART=NART(iART)./NALT(iART);
+
+if isnan(Noxo)
+    NL = sum(xART<0.5)+0.5*sum(xART==0.5); NL=max([NL 1]);
+    eNL = sqrt(NL);
+    N=length(xART);
+    top = sum(xART)-NL;
+    sigma_top=sqrt(sum(eART.^2) + (ZCI*eNL)^2);
+    bot = N-2*NL;
+    sigma_bot=sqrt(ZCI*(N+2*NL));
+    PoxoG=top/bot;
+    PoxoGci(1) = PoxoG-sqrt( (sigma_top/bot).^2 + (top*sigma_bot/bot^2).^2);
+    PoxoGci(2) = PoxoG+sqrt( (sigma_top/bot).^2 + (top*sigma_bot/bot^2).^2);
+else
+    % count of all artifact-mode mutations (C>A + G>T)
+    N=sum(iART) ;
+    % count of real mutaitons in artifact mode 
+    Nreal = N - Noxo; 
+    %[dummy1, NrealCI] = poissfit(Nreal, alphaci);
+    xreal=Nreal/N;
+    cx = binocdf(0:N,N,xreal);
+    k = find(cx>=(alphaci/2)); NrealCI(1)=k(1)-1; 
+    k = find(cx<=((1-alphaci/2))); 
+    if ~isempty(k) 
+        NrealCI(2,1)=k(end);
+    else
+        NrealCI(2,1) = 0;
+    end
+
+    %NrealCI = Nreal + (sqrt( Nreal*ZCI/2 +(NoxoCI(2)-Noxo).^2) -sqrt( Nreal*ZCI/2 +(NoxoCI(1)-Noxo).^2)) ; 
+    top = sum(xART)-Nreal/2;
+    bot = Noxo;
+    sigma_top(1) = sqrt(sum( (Fci(:,1)-Fhat).^2) + (NrealCI(2)-Nreal)^2);
+    sigma_top(2,1) = sqrt(sum( (Fci(:,2)-Fhat).^2) + (NrealCI(1)-Nreal)^2);
+    sigma_bot(1) = (Noxo-NoxoCI(:,1));
+    sigma_bot(2,1) = (NoxoCI(:,2)-Noxo);
+    PoxoG=top/bot;
+    PoxoGci(1) = PoxoG - sqrt( (sigma_top(1)/bot).^2 + (top*sigma_bot(2)/bot^2).^2);
+    PoxoGci(2) = PoxoG + sqrt( (sigma_top(2)/bot).^2 + (top*sigma_bot(1)/bot^2).^2);
+    if (PoxoG>1), PoxoG=1;end;
+    if (PoxoG<0), PoxoG=0;end;
+    PoxoGci(PoxoGci>1)=1;
+    PoxoGci(PoxoGci<0)=0;
+    
+end
+
+
+function test
+f1='/local/cga-fh/cga/Test_OxoG/Individual_Set/Test13Jul2012/Individual/CESC-HSCX1127/jobs/capture/mut/oxog/filtered_maf/CESC-HSCX1127.oxoG.filter.maf.annotated'
+f2='/local/cga-fh/cga/Test_OxoG/Individual_Set/Test13Jul2012/Individual/CESC-HSCX1127/jobs/capture/mut/oxog/filtered_maf/CESC-HSCX1127.oxoG.filter.maf.annotated.reject.maf.annotated'
+X1=load_table(f1);
+X2=load_table(f2);
+X=mergeStruct(X1,X2)
+X=trimStruct(X,find(ismember(X.Variant_Type,'SNP')))
+
+TOFROM=strcat(X.Reference_Allele,X.Tumor_Seq_Allele1);
+iCA=ismember(TOFROM,{'CA'});
+iGT=ismember(TOFROM,{'GT'});
+iART=ismember(TOFROM,{'CA','GT'});
+NART=X.i_t_ALT_F1R2.*iGT + X.i_t_ALT_F2R1.*iCA;
+NALT=X.i_t_ALT_F1R2+ X.i_t_ALT_F2R1;
+alphaci=0.1;
+[PoxoG,PoxoGci]=PoxoGestimate(NALT,NART,iART,alphaci)
+
